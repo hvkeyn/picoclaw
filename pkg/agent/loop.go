@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -30,6 +32,7 @@ type AgentLoop struct {
 	contextBuilder *ContextBuilder
 	tools          *tools.ToolRegistry
 	running        bool
+	summarizing    sync.Map
 }
 
 func NewAgentLoop(cfg *config.Config, bus *bus.MessageBus, provider providers.LLMProvider) *AgentLoop {
@@ -58,6 +61,7 @@ func NewAgentLoop(cfg *config.Config, bus *bus.MessageBus, provider providers.LL
 		contextBuilder: NewContextBuilder(workspace),
 		tools:          toolsRegistry,
 		running:        false,
+		summarizing:    sync.Map{},
 	}
 }
 
@@ -109,8 +113,12 @@ func (al *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey stri
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
+	history := al.sessions.GetHistory(msg.SessionKey)
+	summary := al.sessions.GetSummary(msg.SessionKey)
+
 	messages := al.contextBuilder.BuildMessages(
-		al.sessions.GetHistory(msg.SessionKey),
+		history,
+		summary,
 		msg.Content,
 		nil,
 	)
@@ -187,7 +195,73 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	al.sessions.AddMessage(msg.SessionKey, "user", msg.Content)
 	al.sessions.AddMessage(msg.SessionKey, "assistant", finalContent)
+
+	// Context compression logic
+	newHistory := al.sessions.GetHistory(msg.SessionKey)
+	if len(newHistory) > 20 {
+		if _, loading := al.summarizing.LoadOrStore(msg.SessionKey, true); !loading {
+			go func() {
+				defer al.summarizing.Delete(msg.SessionKey)
+				al.summarizeSession(msg.SessionKey)
+			}()
+		}
+	}
+
 	al.sessions.Save(al.sessions.GetOrCreate(msg.SessionKey))
 
 	return finalContent, nil
+}
+
+func (al *AgentLoop) summarizeSession(sessionKey string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	history := al.sessions.GetHistory(sessionKey)
+	summary := al.sessions.GetSummary(sessionKey)
+
+	// Keep last 4 messages, summarize the rest
+	if len(history) <= 4 {
+		return
+	}
+
+	toSummarize := history[:len(history)-4]
+
+	prompt := "Below is a conversation history and an optional existing summary. " +
+		"Please provide a concise summary of the conversation so far, " +
+		"preserving the core context and key points discussed. " +
+		"If there's an existing summary, incorporate it into the new one.\n\n"
+
+	if summary != "" {
+		prompt += "EXISTING SUMMARY: " + summary + "\n\n"
+	}
+
+	prompt += "CONVERSATION TO SUMMARIZE:\n"
+	for _, m := range toSummarize {
+		if m.Role == "user" || m.Role == "assistant" {
+			prompt += fmt.Sprintf("%s: %s\n", m.Role, m.Content)
+		}
+	}
+
+	messages := []providers.Message{
+		{
+			Role:    "user",
+			Content: prompt,
+		},
+	}
+
+	response, err := al.provider.Chat(ctx, messages, nil, al.model, map[string]interface{}{
+		"max_tokens":  1024,
+		"temperature": 0.3,
+	})
+
+	if err != nil {
+		fmt.Printf("Error summarizing session %s: %v\n", sessionKey, err)
+		return
+	}
+
+	if response.Content != "" {
+		al.sessions.SetSummary(sessionKey, response.Content)
+		al.sessions.TruncateHistory(sessionKey, 4)
+		al.sessions.Save(al.sessions.GetOrCreate(sessionKey))
+	}
 }

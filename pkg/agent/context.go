@@ -84,7 +84,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	return result
 }
 
-func (cb *ContextBuilder) BuildMessages(history []providers.Message, currentMessage string, media []string) []providers.Message {
+func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string) []providers.Message {
 	messages := []providers.Message{}
 
 	systemPrompt := cb.BuildSystemPrompt()
@@ -101,6 +101,10 @@ func (cb *ContextBuilder) BuildMessages(history []providers.Message, currentMess
 	skillsContent := cb.loadSkills()
 	if skillsContent != "" {
 		systemPrompt += "\n\n" + skillsContent
+	}
+
+	if summary != "" {
+		systemPrompt += "\n\n## Summary of Previous Conversation\n\n" + summary
 	}
 
 	messages = append(messages, providers.Message{
