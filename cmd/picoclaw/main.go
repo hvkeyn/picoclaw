@@ -401,8 +401,9 @@ func agentCmd() {
 
 	provider, err := providers.CreateProvider(cfg)
 	if err != nil {
-		fmt.Printf("Error creating provider: %v\n", err)
-		os.Exit(1)
+		fmt.Printf("⚠ Warning: %v\n", err)
+		fmt.Println("  AI features won't work until a provider is configured.")
+		provider = providers.NewNullProvider(err.Error())
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -536,8 +537,9 @@ func gatewayCmd() {
 
 	provider, err := providers.CreateProvider(cfg)
 	if err != nil {
-		fmt.Printf("Error creating provider: %v\n", err)
-		os.Exit(1)
+		fmt.Printf("⚠ Warning: %v\n", err)
+		fmt.Println("  Gateway will start, but AI features won't work until a provider is configured.")
+		provider = providers.NewNullProvider(err.Error())
 	}
 
 	msgBus := bus.NewMessageBus()

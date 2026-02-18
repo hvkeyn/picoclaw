@@ -221,6 +221,22 @@ func createCodexAuthProvider(enableWebSearch bool) (LLMProvider, error) {
 	return p, nil
 }
 
+type NullProvider struct {
+	reason string
+}
+
+func NewNullProvider(reason string) *NullProvider {
+	return &NullProvider{reason: reason}
+}
+
+func (p *NullProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}) (*LLMResponse, error) {
+	return nil, fmt.Errorf("LLM provider not configured: %s", p.reason)
+}
+
+func (p *NullProvider) GetDefaultModel() string {
+	return ""
+}
+
 func CreateProvider(cfg *config.Config) (LLMProvider, error) {
 	model := cfg.Agents.Defaults.Model
 	providerName := strings.ToLower(cfg.Agents.Defaults.Provider)
